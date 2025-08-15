@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durak Game</title>
+    <link rel="stylesheet" href="css/styles.css">
+    
+    <!-- Buffer Polyfill - MINIMAL FIX -->
+    <script src="https://unpkg.com/buffer@6.0.3/index.js"></script>
+    <script>
+        // Simple Buffer polyfill setup
+        if (typeof global === 'undefined') {
+            var global = globalThis;
+        }
+        if (typeof Buffer === 'undefined' && typeof buffer !== 'undefined') {
+            var Buffer = buffer.Buffer;
+        }
+    </script>
+</head>
+<body>
+    <div class="game-container">
+        <!-- Game Board (hidden initially) -->
+        <div id="gameBoard">
+            <!-- Top Bar -->
+            <div class="top-bar">
+                <div class="timer-container">
+                    <div class="timer-display">
+                        <span class="timer" id="timer">0</span>
+                    </div>
+                </div>
+                <div class="pot-display">
+                    Pot: <span class="pot-amount">0.2 SOL</span>
+                </div>
+                <div class="balance-display">
+                    <span id="walletAddress">EL4r...1gEf</span>
+                    <span id="walletBalance">2.454 SOL</span>
+                </div>
+            </div>
+
+            <!-- Opponent Section -->
+            <div class="opponent-section">
+                <div class="opponent-info">
+                    <div class="opponent-avatar">
+                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                            <circle cx="20" cy="20" r="20" fill="#4a5568"/>
+                            <path d="M20 20C22.5 20 24.5 18 24.5 15.5C24.5 13 22.5 11 20 11C17.5 11 15.5 13 15.5 15.5C15.5 18 17.5 20 20 20Z" fill="#a0aec0"/>
+                            <path d="M20 22C15 22 11 26 11 31H29C29 26 25 22 20 22Z" fill="#a0aec0"/>
+                        </svg>
+                    </div>
+                    <span class="opponent-label">Opponent</span>
+                </div>
+                <div class="opponent-hand" id="opponentHand">
+                    <!-- Cards will be added here -->
+                </div>
+            </div>
+
+            <!-- Game Table -->
+            <div class="game-table-area">
+                <div class="deck-and-trump">
+                    <div class="deck" id="deck">
+                        <div class="card-count" id="deckCount">0</div>
+                    </div>
+                    <div class="trump-card" id="trumpCard"></div>
+                </div>
+
+                <div class="battle-area" id="battleArea">
+                    <div class="game-status" id="gameStatus">Waiting to start...</div>
+                </div>
+
+                <div class="beat-pile-container">
+                    <div class="beat-pile" id="beatPile" style="display: none;">
+                        <div class="beat-pile-icon">✓</div>
+                        <div class="beat-pile-label">Beat: <span id="beatPileCount">0</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Player Hand -->
+            <div class="player-section">
+                <div class="hand player-hand" id="playerHand">
+                    <!-- Player cards will be added here -->
+                </div>
+            </div>
+
+            <!-- Action Buttons (floating) -->
+            <div class="action-buttons">
+                <button class="btn btn-take" id="takeBtn" onclick="takeCards()" style="display: none;">Take Cards</button>
+                <button class="btn btn-beat" id="beatBtn" onclick="beatCards()" style="display: none;">Beat</button>
+                <button class="btn btn-pass" id="passBtn" onclick="passAttack()" style="display: none;">Pass</button>
+            </div>
+        </div>
+
+        <!-- Game Lobby -->
+        <div id="gameLobby" class="game-lobby">
+            <div class="lobby-card">
+                <div class="lobby-header">
+                    <span class="card-icon">🃏</span>
+                    <h1>Durak Dapp</h1>
+                </div>
+                
+                <p class="lobby-subtitle">Play durak for real SOL on Solana</p>
+                
+                <div class="entry-fee-box">
+                    <h2>0.1 SOL Entry Fee</h2>
+                    <p>Winner takes 0.198 SOL (2% house fee)</p>
+                </div>
+                
+                <p class="house-fee-text">House fees go to: 784d...b8A7</p>
+                
+                <!-- Wallet Section -->
+                <div class="wallet-section">
+                    <!-- Connect Wallet Button (shown when not connected) -->
+                    <button id="connectWallet" class="btn btn-deposit" onclick="walletFunctions.connectWallet()">
+                        Connect Wallet
+                    </button>
+                    
+                    <!-- Wallet Info (shown after connection) -->
+                    <div id="walletInfo" style="display: none;">
+                        <div class="wallet-display">
+                            <div class="wallet-address">
+                                <span class="wallet-label">Wallet:</span>
+                                <span id="walletAddressDisplay">Not connected</span>
+                            </div>
+                            <div class="wallet-balance">
+                                <span class="wallet-label">Balance:</span>
+                                <span id="walletBalanceDisplay">0.000 SOL</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Multiplayer Options (shown after wallet connect) -->
+                <div id="gameOptions" style="display: none;">
+                    <button class="btn btn-deposit" onclick="showCreateGame()">Create Game</button>
+                    <button class="btn btn-deposit" onclick="showJoinGame()">Join Game</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Game Modal -->
+        <div id="createGameModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="lobby-card">
+                    <h2>Create New Game</h2>
+                    <p>You'll get a code to share with your opponent</p>
+                    <div class="entry-fee-box">
+                        <p>Deposit: 0.102 SOL</p>
+                    </div>
+                    <button class="btn btn-deposit" onclick="createNewGame()">Create & Deposit</button>
+                    <button class="btn btn-cancel" onclick="hideModals()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Join Game Modal -->
+        <div id="joinGameModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="lobby-card">
+                    <h2>Join Existing Game</h2>
+                    <input type="text" id="gameCodeInput" placeholder="GAME CODE" maxlength="6" style="text-transform: uppercase;">
+                    <div class="entry-fee-box">
+                        <p>Deposit: 0.102 SOL</p>
+                    </div>
+                    <button class="btn btn-deposit" onclick="joinExistingGame()">Join & Deposit</button>
+                    <button class="btn btn-cancel" onclick="hideModals()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Waiting Room Modal -->
+        <div id="waitingRoom" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="lobby-card">
+                    <h2>Waiting for Opponent...</h2>
+                    <p>Share this code:</p>
+                    <div class="game-code-display" id="gameCodeDisplay">------</div>
+                    <p class="waiting-status">⏳ Waiting for opponent to join...</p>
+                    <div id="opponentJoinedInfo" style="display: none;">
+                        <p class="success-text">✅ Opponent joined!</p>
+                    </div>
+                    <button class="btn btn-cancel" onclick="cancelGame()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Victory Modal -->
+        <div id="victoryModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="lobby-card victory-card">
+                    <div class="victory-animation">🎉</div>
+                    <h1 id="victoryTitle">Victory!</h1>
+                    <div class="victory-details">
+                        <p class="winner-text" id="winnerText">Player 1 Wins!</p>
+                        <div class="payout-info">
+                            <p class="payout-amount" id="payoutAmount">0.2 SOL</p>
+                            <p class="payout-status" id="payoutStatus">Processing payout...</p>
+                        </div>
+                    </div>
+                    <button class="btn btn-deposit" id="returnToLobbyBtn" onclick="returnToLobbyFromVictory()" style="display: none;">
+                        Return to Lobby
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Messages -->
+        <div id="statusMessage" class="status-message"></div>
+    </div>
+
+    <!-- Scripts - ORIGINAL order restored -->
+    <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/main.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/wallet.js"></script>
+    <script src="js/multiplayer.js"></script>
+</body>
+</html>
