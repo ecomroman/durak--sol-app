@@ -216,10 +216,10 @@
     <script src="js/wallet.js"></script>
     <script src="js/multiplayer.js"></script>
     
-    <!-- Vercel Analytics -->
-    <script type="module">
-        import { inject } from 'https://cdn.skypack.dev/@vercel/analytics';
-        inject();
+    <!-- Vercel Analytics - Fixed approach -->
+    <script>
+        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
     </script>
+    <script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
