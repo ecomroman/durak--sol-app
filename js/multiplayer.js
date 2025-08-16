@@ -1,8 +1,9 @@
-// multiplayer.js - Multiplayer Game Management with REAL Escrow Payouts
+// multiplayer.js - Multiplayer Game Management with Firebase
 
 // Game session data
 let currentGameSession = null;
-let pollingInterval = null;
+let gameListener = null;
+let gameStateListener = null;
 let isGameStarted = false;
 
 // Show status helper (use from wallet.js if available, otherwise basic implementation)
@@ -61,14 +62,28 @@ function hideModals() {
 }
 
 // Cancel game
-function cancelGame() {
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
+async function cancelGame() {
+    console.log('🚫 Canceling game...');
+    
+    // Stop Firebase listeners
+    if (gameListener) {
+        gameListener();
+        gameListener = null;
     }
     
+    if (gameStateListener) {
+        gameStateListener();
+        gameStateListener = null;
+    }
+    
+    // Clean up Firebase data
     if (currentGameSession && currentGameSession.code) {
-        localStorage.removeItem(`game_${currentGameSession.code}`);
+        try {
+            await FirebaseDB.cleanupGame(currentGameSession.code);
+            console.log('🧹 Game cleaned up from Firebase');
+        } catch (error) {
+            console.error('Error cleaning up game:', error);
+        }
     }
     
     currentGameSession = null;
@@ -80,7 +95,7 @@ function cancelGame() {
     }
 }
 
-// Create new game
+// Create new game - FIREBASE VERSION
 async function createNewGame() {
     try {
         // Disable button to prevent double-clicks
@@ -91,6 +106,13 @@ async function createNewGame() {
         
         if (!wallet) {
             showStatus('Please connect wallet first', 'error');
+            if (createBtn) createBtn.disabled = false;
+            return;
+        }
+        
+        // Check if Firebase is ready
+        if (!window.FirebaseDB) {
+            showStatus('Firebase not ready. Please refresh and try again.', 'error');
             if (createBtn) createBtn.disabled = false;
             return;
         }
@@ -122,19 +144,25 @@ async function createNewGame() {
             guest: null,
             escrowWallet: escrowData.publicKey.toString(),
             escrowSecret: escrowData.secretKey,
-            escrowKeypair: escrowData.keypair, // Keep in memory for host
+            escrowKeypair: escrowData.keypair,
             hostDeposited: false,
             guestDeposited: false,
             gameStarted: false,
             createdAt: Date.now()
         };
         
-        // Save to localStorage WITH escrow data for both players to access
-        localStorage.setItem(`game_${gameCode}`, JSON.stringify({
+        // Save to Firebase (not localStorage!)
+        const success = await FirebaseDB.saveGame(gameCode, {
             ...currentGameSession,
-            escrowKeypair: undefined, // Don't store the actual keypair object
-            escrowSecretKey: escrowData.secretKey // But store the secret key for reconstruction
-        }));
+            escrowKeypair: undefined, // Don't store keypair object
+            escrowSecretKey: escrowData.secretKey // Store secret key for reconstruction
+        });
+        
+        if (!success) {
+            throw new Error('Failed to save game to Firebase');
+        }
+        
+        console.log('🎮 Game created in Firebase:', gameCode);
         
         // Make sure global reference is available
         window.currentGameSession = currentGameSession;
@@ -150,20 +178,20 @@ async function createNewGame() {
                 depositSuccess = true;
                 currentGameSession.hostDeposited = true;
                 
-                // Update localStorage
-                localStorage.setItem(`game_${gameCode}`, JSON.stringify({
+                // Update Firebase with deposit status
+                await FirebaseDB.saveGame(gameCode, {
                     ...currentGameSession,
                     escrowKeypair: undefined,
                     escrowSecretKey: escrowData.secretKey
-                }));
+                });
                 
                 // Show waiting room
                 hideModals();
                 document.getElementById('waitingRoom').style.display = 'flex';
                 document.getElementById('gameCodeDisplay').textContent = gameCode;
                 
-                // Start polling for guest
-                startHostPolling();
+                // Start listening for opponent
+                startHostListening(gameCode);
                 
             } catch (error) {
                 retries++;
@@ -171,7 +199,6 @@ async function createNewGame() {
                 
                 if (error.message.includes('already been processed') && retries < maxRetries) {
                     showStatus(`Transaction issue, retrying... (${retries}/${maxRetries})`, 'info');
-                    // Wait before retry
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 } else if (retries >= maxRetries) {
                     throw error;
@@ -186,7 +213,7 @@ async function createNewGame() {
         
         // Clean up on failure
         if (currentGameSession && currentGameSession.code) {
-            localStorage.removeItem(`game_${currentGameSession.code}`);
+            await FirebaseDB.cleanupGame(currentGameSession.code);
         }
         currentGameSession = null;
         
@@ -200,11 +227,17 @@ async function createNewGame() {
     }
 }
 
-// Join existing game
+// Join existing game - FIREBASE VERSION
 async function joinExistingGame() {
     try {
         if (!wallet) {
             showStatus('Please connect wallet first', 'error');
+            return;
+        }
+        
+        // Check if Firebase is ready
+        if (!window.FirebaseDB) {
+            showStatus('Firebase not ready. Please refresh and try again.', 'error');
             return;
         }
         
@@ -216,18 +249,19 @@ async function joinExistingGame() {
             return;
         }
         
-        showStatus('Joining game...', 'info');
+        showStatus('Looking for game...', 'info');
         
-        // Check if game exists
-        const gameData = localStorage.getItem(`game_${gameCode}`);
+        // Get game from Firebase (not localStorage!)
+        const gameData = await FirebaseDB.getGame(gameCode);
         if (!gameData) {
             showStatus('Game not found', 'error');
             return;
         }
         
-        currentGameSession = JSON.parse(gameData);
+        console.log('🎮 Found game in Firebase:', gameCode);
+        currentGameSession = gameData;
         
-        // CRITICAL: Reconstruct escrow keypair from secret key for guest
+        // Reconstruct escrow keypair from secret key
         if (currentGameSession.escrowSecretKey) {
             console.log('🔑 Reconstructing escrow keypair for guest...');
             const secretKeyArray = new Uint8Array(currentGameSession.escrowSecretKey);
@@ -249,15 +283,19 @@ async function joinExistingGame() {
         
         // Make deposit
         try {
+            showStatus('Joining game and depositing...', 'info');
+            
             await window.walletFunctions.makeGameDeposit(false);
             currentGameSession.guestDeposited = true;
             
-            // Update localStorage
-            localStorage.setItem(`game_${gameCode}`, JSON.stringify({
+            // Update Firebase with guest info
+            await FirebaseDB.saveGame(gameCode, {
                 ...currentGameSession,
                 escrowKeypair: undefined,
                 escrowSecretKey: currentGameSession.escrowSecretKey
-            }));
+            });
+            
+            console.log('🎮 Guest joined game in Firebase');
             
             // Start the game
             hideModals();
@@ -267,11 +305,14 @@ async function joinExistingGame() {
             console.error('Deposit failed:', error);
             currentGameSession.guest = null;
             currentGameSession.guestDeposited = false;
-            localStorage.setItem(`game_${gameCode}`, JSON.stringify({
+            
+            // Update Firebase to remove guest
+            await FirebaseDB.saveGame(gameCode, {
                 ...currentGameSession,
                 escrowKeypair: undefined,
                 escrowSecretKey: currentGameSession.escrowSecretKey
-            }));
+            });
+            
             throw error;
         }
         
@@ -281,49 +322,52 @@ async function joinExistingGame() {
     }
 }
 
-// Start host polling
-function startHostPolling() {
-    pollingInterval = setInterval(() => {
-        if (!currentGameSession || !currentGameSession.code) {
-            clearInterval(pollingInterval);
-            return;
-        }
+// Start host listening - FIREBASE VERSION
+function startHostListening(gameCode) {
+    console.log('🎧 Host listening for opponent on Firebase...');
+    
+    // Listen for real-time updates to the game
+    gameListener = FirebaseDB.listenToGame(gameCode, (updatedGameData) => {
+        console.log('🔄 Game data updated:', updatedGameData);
         
-        // Check localStorage for updates
-        const gameData = localStorage.getItem(`game_${currentGameSession.code}`);
-        if (gameData) {
-            const updatedSession = JSON.parse(gameData);
+        // Check if guest joined
+        if (updatedGameData.guest && !currentGameSession.guest) {
+            console.log('🎮 Opponent joined!');
             
-            // Check if guest joined
-            if (updatedSession.guest && !currentGameSession.guest) {
-                currentGameSession.guest = updatedSession.guest;
-                currentGameSession.guestDeposited = updatedSession.guestDeposited;
+            currentGameSession.guest = updatedGameData.guest;
+            currentGameSession.guestDeposited = updatedGameData.guestDeposited;
+            
+            // Update UI
+            const opponentInfo = document.getElementById('opponentJoinedInfo');
+            if (opponentInfo) {
+                opponentInfo.style.display = 'block';
+            }
+            
+            showStatus('Opponent joined!', 'success');
+            
+            // Check if both deposited
+            if (currentGameSession.hostDeposited && currentGameSession.guestDeposited) {
+                console.log('🚀 Both players deposited - starting game!');
                 
-                // Update UI
-                const opponentInfo = document.getElementById('opponentJoinedInfo');
-                if (opponentInfo) {
-                    opponentInfo.style.display = 'block';
+                // Stop listening to game creation
+                if (gameListener) {
+                    gameListener();
+                    gameListener = null;
                 }
                 
-                showStatus('Opponent joined!', 'success');
-                
-                // Check if both deposited
-                if (currentGameSession.hostDeposited && currentGameSession.guestDeposited) {
-                    clearInterval(pollingInterval);
-                    setTimeout(() => {
-                        startMultiplayerGame(true);
-                    }, 2000);
-                }
+                setTimeout(() => {
+                    startMultiplayerGame(true);
+                }, 2000);
             }
         }
-    }, POLLING_INTERVAL);
+    });
 }
 
-// Start multiplayer game
+// Start multiplayer game - FIREBASE VERSION
 function startMultiplayerGame(isHost) {
     if (isGameStarted) return;
     
-    console.log('Starting multiplayer game, isHost:', isHost);
+    console.log('🎮 Starting Firebase multiplayer game, isHost:', isHost);
     
     isGameStarted = true;
     currentGameSession.gameStarted = true;
@@ -336,19 +380,17 @@ function startMultiplayerGame(isHost) {
         console.log('✅ Escrow keypair reconstructed for game');
     }
     
-    // Update localStorage
-    if (currentGameSession.code) {
-        localStorage.setItem(`game_${currentGameSession.code}`, JSON.stringify({
-            ...currentGameSession,
-            escrowKeypair: undefined,
-            escrowSecretKey: currentGameSession.escrowSecretKey
-        }));
-    }
+    // Update Firebase with game started status
+    FirebaseDB.saveGame(currentGameSession.code, {
+        ...currentGameSession,
+        escrowKeypair: undefined,
+        escrowSecretKey: currentGameSession.escrowSecretKey
+    });
     
     // Set multiplayer mode
     window.isMultiplayer = true;
     window.isHost = isHost;
-    window.currentGameSession = currentGameSession; // Make sure it's globally available
+    window.currentGameSession = currentGameSession;
     
     if (window.setMultiplayerMode) {
         window.setMultiplayerMode(isHost);
@@ -365,8 +407,8 @@ function startMultiplayerGame(isHost) {
     // Make sure gameState is set
     window.gameState = 'playing';
     
-    // Start game sync polling
-    startGameSyncPolling();
+    // Start Firebase game sync
+    startFirebaseGameSync();
     
     // Initialize game state (host only)
     if (isHost && window.enterGameMode) {
@@ -392,72 +434,55 @@ function startMultiplayerGame(isHost) {
     }
 }
 
-// Game state synchronization
-let lastGameState = null;
-
-function startGameSyncPolling() {
-    // Clear any existing polling
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-    }
+// Firebase game state synchronization
+function startFirebaseGameSync() {
+    console.log('🔄 Starting Firebase game sync...');
     
-    pollingInterval = setInterval(() => {
-        if (!currentGameSession || !currentGameSession.code) {
-            clearInterval(pollingInterval);
-            return;
-        }
+    // Listen for real-time game state changes
+    gameStateListener = FirebaseDB.listenToGameState(currentGameSession.code, (gameState) => {
+        console.log('🔄 Game state changed from Firebase');
         
-        // Get current game state from localStorage
-        const gameStateKey = `gameState_${currentGameSession.code}`;
-        const storedState = localStorage.getItem(gameStateKey);
-        
-        if (storedState) {
-            const parsedState = JSON.parse(storedState);
+        // Update game if we didn't send this update
+        if (gameState.sender !== wallet.publicKey.toString()) {
+            console.log('📥 Received game state from opponent');
             
-            // Check if state has changed
-            if (JSON.stringify(parsedState) !== JSON.stringify(lastGameState)) {
-                lastGameState = parsedState;
-                
-                // Update game if we didn't send this update
-                if (parsedState.sender !== wallet.publicKey.toString()) {
-                    // Handle timeout forfeit
-                    if (parsedState.lastMove && parsedState.lastMove.type === 'timeout') {
-                        console.log('Received timeout forfeit from opponent');
-                        if (window.updateMultiplayerGameState) {
-                            window.updateMultiplayerGameState(parsedState.gameData);
-                        }
-                    } else if (window.updateMultiplayerGameState) {
-                        window.updateMultiplayerGameState(parsedState.gameData);
-                    }
+            // Handle timeout forfeit
+            if (gameState.lastMove && gameState.lastMove.type === 'timeout') {
+                console.log('⏰ Received timeout forfeit from opponent');
+                if (window.updateMultiplayerGameState) {
+                    window.updateMultiplayerGameState(gameState.gameData);
                 }
+            } else if (window.updateMultiplayerGameState) {
+                window.updateMultiplayerGameState(gameState.gameData);
             }
         }
-    }, 500); // Faster polling for game moves
+    });
 }
 
-// Send game move with timer sync
-function sendGameMove(move) {
+// Send game move with Firebase
+async function sendGameMove(move) {
     if (!currentGameSession || !currentGameSession.code) {
         console.error('No active game session');
         return;
     }
     
-    console.log('Sending game move:', move);
+    console.log('📤 Sending game move to Firebase:', move.type || 'move');
     
-    const gameStateKey = `gameState_${currentGameSession.code}`;
     const gameState = {
         gameData: move.gameData || window.gameData,
         lastMove: move,
         sender: wallet.publicKey.toString(),
         timestamp: Date.now(),
-        currentTurn: move.gameData ? move.gameData.currentTurn : window.gameData.currentTurn,
-        gamePhase: move.gameData ? move.gameData.gamePhase : window.gameData.gamePhase
+        currentTurn: move.gameData ? move.gameData.currentTurn : window.gameData?.currentTurn,
+        gamePhase: move.gameData ? move.gameData.gamePhase : window.gameData?.gamePhase
     };
     
-    localStorage.setItem(gameStateKey, JSON.stringify(gameState));
-    lastGameState = gameState;
-    
-    console.log('Game state saved with turn info:', gameState.currentTurn, gameState.gamePhase);
+    try {
+        await FirebaseDB.updateGameState(currentGameSession.code, gameState);
+        console.log('✅ Game move sent to Firebase');
+    } catch (error) {
+        console.error('❌ Failed to send game move:', error);
+    }
 }
 
 // Check if it's my turn (deprecated - use isActivePlayer instead)
@@ -467,7 +492,7 @@ function isMyTurn() {
     const isHostTurn = window.gameData.currentTurn === 'player';
     const myTurn = (window.isHost && isHostTurn) || (!window.isHost && !isHostTurn);
     
-    console.log('isMyTurn check - isHost:', window.isHost, 'currentTurn:', window.gameData.currentTurn, 'isHostTurn:', isHostTurn, 'myTurn:', myTurn);
+    console.log('isMyTurn check - isHost:', window.isHost, 'currentTurn:', window.gameData.currentTurn, 'myTurn:', myTurn);
     
     return myTurn;
 }
@@ -478,22 +503,27 @@ function getMyHand() {
     return window.isHost ? window.gameData.playerHand : window.gameData.opponentHand;
 }
 
-// REAL ESCROW PAYOUT SYSTEM
+// REAL FIREBASE PAYOUT SYSTEM
 async function handleGameEnd(isWinner) {
-    console.log('=== HANDLE GAME END ===');
-    console.log('Is winner:', isWinner);
+    console.log('🏁 FIREBASE GAME END - Is winner:', isWinner);
     console.log('My wallet:', wallet.publicKey.toString());
     console.log('Escrow available:', !!currentGameSession?.escrowKeypair);
     
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
+    // Stop Firebase listeners
+    if (gameListener) {
+        gameListener();
+        gameListener = null;
+    }
+    
+    if (gameStateListener) {
+        gameStateListener();
+        gameStateListener = null;
     }
     
     return new Promise(async (resolve, reject) => {
         try {
             if (isWinner) {
-                console.log('🎉 I WON! Processing REAL payout from escrow...');
+                console.log('🎉 I WON! Processing REAL Firebase payout...');
                 
                 try {
                     showStatus('You won! Processing payout from escrow...', 'success');
@@ -503,7 +533,7 @@ async function handleGameEnd(isWinner) {
                     const payoutTx = await window.walletFunctions.payoutToWinner(myWalletAddress);
                     
                     if (payoutTx) {
-                        console.log('✅ REAL payout successful:', payoutTx);
+                        console.log('✅ REAL Firebase payout successful:', payoutTx);
                         showStatus(`✅ Payout completed! TX: ${payoutTx}`, 'success');
                     } else {
                         console.log('⚠️ Payout returned null');
@@ -512,7 +542,7 @@ async function handleGameEnd(isWinner) {
                     resolve(payoutTx);
                     
                 } catch (payoutError) {
-                    console.error('❌ Real payout failed:', payoutError);
+                    console.error('❌ Firebase payout failed:', payoutError);
                     showStatus('Payout failed: ' + payoutError.message, 'error');
                     resolve(null);
                 }
@@ -523,14 +553,11 @@ async function handleGameEnd(isWinner) {
                 resolve(null);
             }
             
-            // Clean up game data after a delay
-            setTimeout(() => {
+            // Clean up Firebase data after delay
+            setTimeout(async () => {
                 if (currentGameSession && currentGameSession.code) {
-                    console.log('🧹 Cleaning up game data...');
-                    localStorage.removeItem(`game_${currentGameSession.code}`);
-                    localStorage.removeItem(`gameState_${currentGameSession.code}`);
-                    localStorage.removeItem(`gameEnd_${currentGameSession.code}`);
-                    localStorage.removeItem(`payout_${currentGameSession.code}`);
+                    console.log('🧹 Cleaning up Firebase game data...');
+                    await FirebaseDB.cleanupGame(currentGameSession.code);
                 }
             }, 10000); // Wait 10 seconds before cleanup
             
@@ -538,7 +565,7 @@ async function handleGameEnd(isWinner) {
             window.isMultiplayer = false;
             
         } catch (error) {
-            console.error('❌ Error in handleGameEnd:', error);
+            console.error('❌ Error in Firebase handleGameEnd:', error);
             reject(error);
         }
     });
@@ -554,10 +581,12 @@ window.cancelGame = cancelGame;
 window.sendGameMove = sendGameMove;
 window.isMyTurn = isMyTurn;
 window.getMyHand = getMyHand;
-window.handleGameEnd = handleGameEnd; // ← This now handles REAL escrow payouts!
+window.handleGameEnd = handleGameEnd;
 window.currentGameSession = currentGameSession;
 
 // Also ensure these are available globally
 window.updateMultiplayerGameState = window.updateMultiplayerGameState || function(gameData) {
     console.log('updateMultiplayerGameState called with:', gameData);
 };
+
+console.log('🎮 Firebase multiplayer.js loaded successfully');
