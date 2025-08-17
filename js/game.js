@@ -1,4 +1,4 @@
-// game.js - Durak Game Logic with PROPER Timer Management
+// game.js - Durak Game Logic with PROPER Timer Management and NULL CHECKS
 
 // Card suits and ranks
 const SUITS = ['♠', '♥', '♦', '♣'];
@@ -39,6 +39,7 @@ function createDeck() {
 
 // Shuffle deck using Fisher-Yates algorithm
 function shuffleDeck(deck) {
+    if (!deck || !Array.isArray(deck)) return [];
     for (let i = deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [deck[i], deck[j]] = [deck[j], deck[i]];
@@ -52,15 +53,25 @@ function dealInitialCards() {
     
     console.log('Dealing cards, deck size:', gameData.deck.length);
     
+    // Initialize hands as arrays if they don't exist
+    if (!Array.isArray(gameData.playerHand)) gameData.playerHand = [];
+    if (!Array.isArray(gameData.opponentHand)) gameData.opponentHand = [];
+    
     // Deal 6 cards to each player
     for (let i = 0; i < 6; i++) {
-        gameData.playerHand.push(gameData.deck.pop());
-        gameData.opponentHand.push(gameData.deck.pop());
+        if (gameData.deck.length > 0) {
+            gameData.playerHand.push(gameData.deck.pop());
+        }
+        if (gameData.deck.length > 0) {
+            gameData.opponentHand.push(gameData.deck.pop());
+        }
     }
     
     // Set trump card (bottom of deck)
-    gameData.trumpCard = gameData.deck[0];
-    gameData.trumpSuit = gameData.trumpCard.suit;
+    if (gameData.deck.length > 0) {
+        gameData.trumpCard = gameData.deck[0];
+        gameData.trumpSuit = gameData.trumpCard.suit;
+    }
     
     console.log('Trump card set:', gameData.trumpCard);
     console.log('Trump suit:', gameData.trumpSuit);
@@ -75,6 +86,8 @@ function dealInitialCards() {
 
 // Sort hand by card value and suit
 function sortHand(hand) {
+    if (!hand || !Array.isArray(hand)) return;
+    
     hand.sort((a, b) => {
         if (a.suit === gameData.trumpSuit && b.suit !== gameData.trumpSuit) return 1;
         if (a.suit !== gameData.trumpSuit && b.suit === gameData.trumpSuit) return -1;
@@ -85,10 +98,12 @@ function sortHand(hand) {
 
 // Draw cards from deck to fill hands
 function drawCards() {
-    // IMPORTANT: The person who attacked draws first
-    // In beatCards scenario, the previous defender becomes the new attacker
-    // In takeCards scenario, the attacker remains the same
+    // NULL CHECK: Ensure arrays exist
+    if (!Array.isArray(gameData.playerHand)) gameData.playerHand = [];
+    if (!Array.isArray(gameData.opponentHand)) gameData.opponentHand = [];
+    if (!Array.isArray(gameData.deck)) gameData.deck = [];
     
+    // IMPORTANT: The person who attacked draws first
     let firstDrawer, secondDrawer;
     
     // Determine who draws first based on the last action
@@ -138,26 +153,29 @@ function canBeat(attackCard, defenseCard) {
 function getValidCards(hand, action) {
     const validCards = [];
     
-    if (!hand || hand.length === 0) {
-        console.log('No cards in hand');
+    if (!hand || !Array.isArray(hand) || hand.length === 0) {
+        console.log('No cards in hand or hand is invalid');
         return validCards;
     }
+    
+    // NULL CHECK: Ensure battleArea exists
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
     
     if (action === 'attack' || action === 'attacking') {
         if (gameData.battleArea.length === 0) {
             // First attack - any card is valid
             console.log('First attack - all cards valid');
-            return hand;
+            return [...hand]; // Return copy of hand
         } else {
             // Follow-up attack - only cards with ranks already on table
             const ranksOnTable = new Set();
             gameData.battleArea.forEach(pair => {
-                if (pair.attack) ranksOnTable.add(pair.attack.rank);
-                if (pair.defense) ranksOnTable.add(pair.defense.rank);
+                if (pair && pair.attack) ranksOnTable.add(pair.attack.rank);
+                if (pair && pair.defense) ranksOnTable.add(pair.defense.rank);
             });
             
             for (const card of hand) {
-                if (ranksOnTable.has(card.rank)) {
+                if (card && ranksOnTable.has(card.rank)) {
                     validCards.push(card);
                 }
             }
@@ -165,10 +183,10 @@ function getValidCards(hand, action) {
         }
     } else if (action === 'defend' || action === 'defending') {
         // Find undefended attack
-        const undefendedAttack = gameData.battleArea.find(pair => !pair.defense);
-        if (undefendedAttack) {
+        const undefendedAttack = gameData.battleArea.find(pair => pair && !pair.defense);
+        if (undefendedAttack && undefendedAttack.attack) {
             for (const card of hand) {
-                if (canBeat(undefendedAttack.attack, card)) {
+                if (card && canBeat(undefendedAttack.attack, card)) {
                     validCards.push(card);
                 }
             }
@@ -192,6 +210,13 @@ function selectCard(cardElement, cardIndex) {
     const isMyPhase = (isHost && gameData.currentTurn === 'player') || 
                       (!isHost && gameData.currentTurn === 'opponent');
     const hand = isHost ? gameData.playerHand : gameData.opponentHand;
+    
+    // NULL CHECK: Ensure hand exists and is array
+    if (!hand || !Array.isArray(hand)) {
+        console.log('Hand is invalid');
+        return;
+    }
+    
     const card = hand[cardIndex];
     
     if (!card) {
@@ -217,7 +242,7 @@ function selectCard(cardElement, cardIndex) {
     const validCards = getValidCards(hand, gameData.gamePhase);
     console.log('Valid cards:', validCards);
     
-    const isValid = validCards.some(c => c.rank === card.rank && c.suit === card.suit);
+    const isValid = validCards.some(c => c && c.rank === card.rank && c.suit === card.suit);
     
     if (!isValid) {
         window.showGameStatus('Invalid card selection', 'error');
@@ -227,12 +252,12 @@ function selectCard(cardElement, cardIndex) {
     // Toggle selection
     if (gameData.selectedCard === cardIndex) {
         gameData.selectedCard = null;
-        cardElement.classList.remove('selected');
+        if (cardElement) cardElement.classList.remove('selected');
     } else {
         // Remove previous selection
         document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
         gameData.selectedCard = cardIndex;
-        cardElement.classList.add('selected');
+        if (cardElement) cardElement.classList.add('selected');
     }
     
     // Auto-play for attack/defense
@@ -250,10 +275,23 @@ function playAttack() {
     if (gameData.selectedCard === null || gameData.isGameOver) return;
     
     const hand = isHost ? gameData.playerHand : gameData.opponentHand;
+    
+    // NULL CHECK: Ensure hand exists and is array
+    if (!hand || !Array.isArray(hand)) {
+        console.log('Hand is invalid for attack');
+        return;
+    }
+    
     const card = hand[gameData.selectedCard];
+    if (!card) {
+        console.log('No card selected for attack');
+        return;
+    }
     
     console.log('🔥 ATTACK: Playing attack with card:', card);
-    console.log('🔥 ATTACK: Current turn before:', gameData.currentTurn, 'Phase before:', gameData.gamePhase);
+    
+    // NULL CHECK: Ensure battleArea exists
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
     
     // Add to battle area
     gameData.battleArea.push({ attack: card, defense: null });
@@ -265,8 +303,6 @@ function playAttack() {
     // CRITICAL FIX: Force phase switch to defending
     gameData.gamePhase = 'defending';
     console.log('🔥 ATTACK: FORCED gamePhase to defending - new phase:', gameData.gamePhase);
-    
-    console.log('🔥 ATTACK: After attack - turn:', gameData.currentTurn, 'phase:', gameData.gamePhase);
     
     // Update display first
     updateGameDisplay();
@@ -281,16 +317,18 @@ function playAttack() {
         window.sendGameMove({
             type: 'attack',
             card: card,
-            gameData: gameData // This will have the correct 'defending' phase
+            gameData: gameData
         });
     }
     
     // Check if defender has valid moves
     const defenderHand = isHost ? gameData.opponentHand : gameData.playerHand;
-    const validDefenses = getValidCards(defenderHand, 'defending');
-    
-    if (validDefenses.length === 0) {
-        window.showGameStatus('No valid defense - must take cards');
+    if (defenderHand && Array.isArray(defenderHand)) {
+        const validDefenses = getValidCards(defenderHand, 'defending');
+        
+        if (validDefenses.length === 0) {
+            window.showGameStatus('No valid defense - must take cards');
+        }
     }
 }
 
@@ -299,14 +337,30 @@ function playDefense() {
     if (gameData.selectedCard === null || gameData.isGameOver) return;
     
     const hand = isHost ? gameData.playerHand : gameData.opponentHand;
+    
+    // NULL CHECK: Ensure hand exists and is array
+    if (!hand || !Array.isArray(hand)) {
+        console.log('Hand is invalid for defense');
+        return;
+    }
+    
     const card = hand[gameData.selectedCard];
+    if (!card) {
+        console.log('No card selected for defense');
+        return;
+    }
     
     console.log('🛡️ DEFEND: Playing defense with card:', card);
-    console.log('🛡️ DEFEND: Current turn before:', gameData.currentTurn, 'Phase before:', gameData.gamePhase);
+    
+    // NULL CHECK: Ensure battleArea exists
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
     
     // Find undefended attack
-    const undefendedPair = gameData.battleArea.find(pair => !pair.defense);
-    if (!undefendedPair) return;
+    const undefendedPair = gameData.battleArea.find(pair => pair && !pair.defense);
+    if (!undefendedPair) {
+        console.log('No undefended attack found');
+        return;
+    }
     
     // Add defense
     undefendedPair.defense = card;
@@ -316,10 +370,10 @@ function playDefense() {
     gameData.selectedCard = null;
     
     // Check if all attacks are defended
-    const allDefended = gameData.battleArea.every(pair => pair.defense);
+    const allDefended = gameData.battleArea.every(pair => pair && pair.defense);
     
     if (allDefended) {
-        // All defended - back to attacking phase (attacker can continue or pass)
+        // All defended - back to attacking phase
         gameData.gamePhase = 'attacking';
         window.showGameStatus('All attacks defended!');
         
@@ -328,19 +382,17 @@ function playDefense() {
         
         // Check if attacker can continue
         const attackerHand = isHost ? gameData.playerHand : gameData.opponentHand;
-        const validAttacks = getValidCards(attackerHand, 'attack');
-        
-        if (validAttacks.length === 0 || gameData.battleArea.length >= 6) {
-            // Must beat the cards
-            window.showGameStatus('No more attacks - cards will be beaten');
+        if (attackerHand && Array.isArray(attackerHand)) {
+            const validAttacks = getValidCards(attackerHand, 'attack');
+            
+            if (validAttacks.length === 0 || gameData.battleArea.length >= 6) {
+                window.showGameStatus('No more attacks - cards will be beaten');
+            }
         }
     } else {
-        // Still in defending phase - timer stays with defender for next attack
         console.log('🛡️ DEFEND: Not all defended - timer stays with DEFENDER');
         switchTimerToActivePlayer('Defense played - timer stays with defender');
     }
-    
-    console.log('🛡️ DEFEND: After defense - turn:', gameData.currentTurn, 'phase:', gameData.gamePhase);
     
     // Update display
     updateGameDisplay();
@@ -355,11 +407,14 @@ function playDefense() {
     }
 }
 
-// Take all cards from battle area
+// Take all cards from battle area - FIXED WITH NULL CHECKS
 function takeCards() {
     if (gameData.isGameOver) return;
     
-    console.log('📥 TAKE: Take cards called - phase:', gameData.gamePhase, 'turn:', gameData.currentTurn, 'isHost:', isHost);
+    console.log('📥 TAKE: Take cards called - phase:', gameData.gamePhase);
+    
+    // NULL CHECK: Ensure battleArea exists
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
     
     // Check if there are cards to take
     if (gameData.battleArea.length === 0) {
@@ -396,16 +451,22 @@ function takeCards() {
         }
     }
     
+    // NULL CHECK: Ensure taker hand exists
+    if (!Array.isArray(takerHand)) {
+        console.log('Taker hand is invalid');
+        return;
+    }
+    
     console.log('📥 TAKE: Defender taking cards - taker:', takerName);
     
     // Add all cards from battle area to taker's hand
     let cardsAdded = 0;
     gameData.battleArea.forEach(pair => {
-        if (pair.attack) {
+        if (pair && pair.attack) {
             takerHand.push(pair.attack);
             cardsAdded++;
         }
-        if (pair.defense) {
+        if (pair && pair.defense) {
             takerHand.push(pair.defense);
             cardsAdded++;
         }
@@ -420,11 +481,10 @@ function takeCards() {
     // Set last action
     gameData.lastAction = 'take';
     
-    // Draw cards to refill hands (attacker draws first)
+    // Draw cards to refill hands
     drawCards();
     
     // IMPORTANT: Turn stays with the attacker when defender takes
-    // Only change phase back to attacking
     gameData.gamePhase = 'attacking';
     
     console.log('📥 TAKE: After take - turn stays with ATTACKER:', gameData.currentTurn);
@@ -434,7 +494,7 @@ function takeCards() {
     // Update display
     updateGameDisplay();
     
-    // CRITICAL: Timer stays with attacker who continues their turn
+    // CRITICAL: Timer stays with attacker who continues
     console.log('📥 TAKE: Timer stays with ATTACKER who continues');
     switchTimerToActivePlayer('Cards taken - attacker continues');
     
@@ -450,11 +510,14 @@ function takeCards() {
     }
 }
 
-// Beat cards (successful defense)
+// Beat cards (successful defense) - FIXED WITH NULL CHECKS
 function beatCards() {
     if (gameData.isGameOver) return;
     
     console.log('✅ BEAT: Beat cards called - phase:', gameData.gamePhase);
+    
+    // NULL CHECK: Ensure battleArea exists and is array
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
     
     // Check if battle area has cards
     if (gameData.battleArea.length === 0) {
@@ -463,7 +526,7 @@ function beatCards() {
     }
     
     // Check all attacks are defended
-    const allDefended = gameData.battleArea.every(pair => pair.defense);
+    const allDefended = gameData.battleArea.every(pair => pair && pair.defense);
     
     if (!allDefended) {
         console.log('Cannot beat - not all attacks defended');
@@ -472,10 +535,15 @@ function beatCards() {
     
     console.log('✅ BEAT: Beating cards... Turn before:', gameData.currentTurn);
     
+    // NULL CHECK: Ensure beatPile exists
+    if (!Array.isArray(gameData.beatPile)) gameData.beatPile = [];
+    
     // Move all cards to beat pile
     gameData.battleArea.forEach(pair => {
-        gameData.beatPile.push(pair.attack);
-        if (pair.defense) {
+        if (pair && pair.attack) {
+            gameData.beatPile.push(pair.attack);
+        }
+        if (pair && pair.defense) {
             gameData.beatPile.push(pair.defense);
         }
     });
@@ -516,13 +584,16 @@ function beatCards() {
     }
 }
 
-// Pass attack (attacker chooses not to continue)
+// Pass attack (attacker chooses not to continue) - FIXED WITH NULL CHECKS
 function passAttack() {
     if (gameData.isGameOver) return;
     
     // Check if it's the attacker's turn to pass
     const isMyPhase = (isHost && gameData.currentTurn === 'player') || 
                       (!isHost && gameData.currentTurn === 'opponent');
+    
+    // NULL CHECK: Ensure battleArea exists
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
     
     if (!isMyPhase || gameData.gamePhase !== 'attacking' || gameData.battleArea.length === 0) {
         console.log('Cannot pass - not attacking phase or no cards played');
@@ -532,7 +603,7 @@ function passAttack() {
     console.log('⏩ PASS: Passing attack...');
     
     // Check if all attacks are defended
-    const allDefended = gameData.battleArea.every(pair => pair.defense);
+    const allDefended = gameData.battleArea.every(pair => pair && pair.defense);
     
     if (allDefended) {
         // All defended - beat the cards
@@ -544,10 +615,18 @@ function passAttack() {
         // Force defender to take the cards
         const defenderHand = isHost ? gameData.opponentHand : gameData.playerHand;
         
+        // NULL CHECK: Ensure defender hand exists
+        if (!Array.isArray(defenderHand)) {
+            console.log('Defender hand is invalid');
+            return;
+        }
+        
         // Add all cards to defender's hand
         gameData.battleArea.forEach(pair => {
-            defenderHand.push(pair.attack);
-            if (pair.defense) {
+            if (pair && pair.attack) {
+                defenderHand.push(pair.attack);
+            }
+            if (pair && pair.defense) {
                 defenderHand.push(pair.defense);
             }
         });
@@ -626,6 +705,11 @@ function switchTimerToActivePlayer(reason) {
 function checkGameOver() {
     // Don't check if already game over
     if (gameData.isGameOver) return;
+    
+    // NULL CHECK: Ensure hands exist
+    if (!Array.isArray(gameData.playerHand)) gameData.playerHand = [];
+    if (!Array.isArray(gameData.opponentHand)) gameData.opponentHand = [];
+    if (!Array.isArray(gameData.deck)) gameData.deck = [];
     
     // Game ends when deck is empty and someone has no cards
     if (gameData.deck.length === 0) {
@@ -810,7 +894,7 @@ function endGame(message) {
     }
 }
 
-// Update game display with PROPER timer switching
+// Update game display with PROPER timer switching and NULL CHECKS
 function updateGameDisplay() {
     console.log('🎮 UPDATE DISPLAY: isHost:', isHost, 'turn:', gameData.currentTurn, 'phase:', gameData.gamePhase);
     
@@ -820,9 +904,16 @@ function updateGameDisplay() {
         return;
     }
     
+    // NULL CHECKS: Ensure all arrays exist
+    if (!Array.isArray(gameData.playerHand)) gameData.playerHand = [];
+    if (!Array.isArray(gameData.opponentHand)) gameData.opponentHand = [];
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
+    if (!Array.isArray(gameData.beatPile)) gameData.beatPile = [];
+    if (!Array.isArray(gameData.deck)) gameData.deck = [];
+    
     // Update deck count
     const deckCount = document.getElementById('deckCount');
-    if (deckCount && gameData.deck) {
+    if (deckCount) {
         deckCount.textContent = gameData.deck.length;
     }
     
@@ -857,8 +948,8 @@ function updateGameDisplay() {
     const beatPileEl = document.getElementById('beatPile');
     const beatPileCount = document.getElementById('beatPileCount');
     if (beatPileEl && beatPileCount) {
-        beatPileEl.style.display = gameData.beatPile && gameData.beatPile.length > 0 ? 'flex' : 'none';
-        beatPileCount.textContent = gameData.beatPile ? gameData.beatPile.length : 0;
+        beatPileEl.style.display = gameData.beatPile.length > 0 ? 'flex' : 'none';
+        beatPileCount.textContent = gameData.beatPile.length;
     }
     
     // Update hands based on player perspective
@@ -923,16 +1014,19 @@ function updateGameDisplay() {
     }
 }
 
-// ... (rest of the functions remain the same: updateHand, updateBattleArea, updateActionButtons, etc.)
-
 // Update hand display
 function updateHand(elementId, hand, isActive, hideCards = false) {
     const handEl = document.getElementById(elementId);
     if (!handEl) return;
     
+    // NULL CHECK: Ensure hand exists
+    if (!hand || !Array.isArray(hand)) hand = [];
+    
     handEl.innerHTML = '';
     
     hand.forEach((card, index) => {
+        if (!card) return; // Skip invalid cards
+        
         const cardEl = document.createElement('div');
         cardEl.className = 'card';
         
@@ -959,7 +1053,7 @@ function updateHand(elementId, hand, isActive, hideCards = false) {
                 
                 if (canPlay) {
                     const validCards = getValidCards(hand, gameData.gamePhase);
-                    const isValid = validCards.some(c => c.rank === card.rank && c.suit === card.suit);
+                    const isValid = validCards.some(c => c && c.rank === card.rank && c.suit === card.suit);
                     
                     if (isValid) {
                         cardEl.classList.add('playable');
@@ -984,6 +1078,9 @@ function updateBattleArea() {
     
     battleAreaEl.innerHTML = '';
     
+    // NULL CHECK: Ensure battleArea exists
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
+    
     if (gameData.battleArea.length === 0) {
         const statusEl = document.createElement('div');
         statusEl.className = 'game-status';
@@ -993,14 +1090,18 @@ function updateBattleArea() {
     }
     
     gameData.battleArea.forEach(pair => {
+        if (!pair) return; // Skip invalid pairs
+        
         const pairEl = document.createElement('div');
         pairEl.className = 'attack-pair';
         
         // Attack card
-        const attackEl = document.createElement('div');
-        attackEl.className = `card attack-card ${pair.attack.suit === '♥' || pair.attack.suit === '♦' ? 'red' : 'black'}`;
-        attackEl.textContent = pair.attack.rank + pair.attack.suit;
-        pairEl.appendChild(attackEl);
+        if (pair.attack) {
+            const attackEl = document.createElement('div');
+            attackEl.className = `card attack-card ${pair.attack.suit === '♥' || pair.attack.suit === '♦' ? 'red' : 'black'}`;
+            attackEl.textContent = pair.attack.rank + pair.attack.suit;
+            pairEl.appendChild(attackEl);
+        }
         
         // Defense card (if exists)
         if (pair.defense) {
@@ -1025,6 +1126,9 @@ function updateActionButtons() {
     if (beatBtn) beatBtn.style.display = 'none';
     if (passBtn) passBtn.style.display = 'none';
     
+    // NULL CHECK: Ensure battleArea exists
+    if (!Array.isArray(gameData.battleArea)) gameData.battleArea = [];
+    
     // Determine whose turn it is
     const isMyPhase = (isHost && gameData.currentTurn === 'player') || 
                       (!isHost && gameData.currentTurn === 'opponent');
@@ -1044,7 +1148,7 @@ function updateActionButtons() {
         if (isMyPhase) {
             // I'm attacking and all attacks are defended - show beat button
             const allDefended = gameData.battleArea.length > 0 && 
-                               gameData.battleArea.every(pair => pair.defense);
+                               gameData.battleArea.every(pair => pair && pair.defense);
             if (allDefended && beatBtn) {
                 beatBtn.style.display = 'block';
             }
@@ -1097,7 +1201,7 @@ function updateGameStatus() {
 function enterGameMode() {
     console.log('Entering game mode, isHost:', isHost);
     
-    // Reset game data
+    // Reset game data with NULL SAFE initialization
     gameData = {
         deck: [],
         playerHand: [],
@@ -1143,14 +1247,28 @@ function enterGameMode() {
 // Handle multiplayer game state update
 function updateMultiplayerGameState(newGameData) {
     console.log('🔄 MULTIPLAYER UPDATE: Updating game state from opponent');
+    
+    // NULL CHECK: Ensure newGameData is valid
+    if (!newGameData) {
+        console.log('Invalid game data received');
+        return;
+    }
+    
     console.log('🔄 BEFORE UPDATE: turn =', gameData.currentTurn, 'phase =', gameData.gamePhase);
     console.log('🔄 NEW DATA: turn =', newGameData.currentTurn, 'phase =', newGameData.gamePhase);
     
     // Check if this is a game over update
     const wasGameOver = gameData.isGameOver;
     
-    // CRITICAL: Update game data with new state
-    gameData = newGameData;
+    // CRITICAL: Update game data with new state, ensuring arrays exist
+    gameData = {
+        ...newGameData,
+        deck: Array.isArray(newGameData.deck) ? newGameData.deck : [],
+        playerHand: Array.isArray(newGameData.playerHand) ? newGameData.playerHand : [],
+        opponentHand: Array.isArray(newGameData.opponentHand) ? newGameData.opponentHand : [],
+        battleArea: Array.isArray(newGameData.battleArea) ? newGameData.battleArea : [],
+        beatPile: Array.isArray(newGameData.beatPile) ? newGameData.beatPile : []
+    };
     
     console.log('🔄 AFTER UPDATE: turn =', gameData.currentTurn, 'phase =', gameData.gamePhase);
     
@@ -1222,7 +1340,7 @@ window.returnToLobbyFromGame = function() {
         victoryModal.style.display = 'none';
     }
     
-    // Reset game state
+    // Reset game state with NULL SAFE initialization
     gameData = {
         deck: [],
         playerHand: [],
@@ -1270,3 +1388,5 @@ window.beatCards = beatCards;
 window.passAttack = passAttack;
 window.updateMultiplayerGameState = updateMultiplayerGameState;
 window.setMultiplayerMode = setMultiplayerMode;
+
+console.log('🎮 game.js loaded with NULL CHECKS - ready to play!');
